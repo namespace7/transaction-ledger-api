@@ -1,5 +1,6 @@
 import accountService from "../services/account.service.js";
 import { createAccountSchema } from "../validators/account.validator.js";
+import { z } from "zod";
 
 async function create(req, res, next) {
   try {
@@ -32,6 +33,18 @@ async function create(req, res, next) {
 
 async function getById(req, res, next) {
   try {
+    const idValidation = z.string().uuid().safeParse(req.params.id);
+
+    if (!idValidation.success) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: "INVALID_ACCOUNT_ID",
+          message: "Account ID must be a valid UUID.",
+        },
+      });
+    }
+
     const account = await accountService.getAccount(req.params.id);
 
     if (!account) {

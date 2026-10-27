@@ -4,6 +4,7 @@ import helmet from "helmet";
 
 import healthRoutes from "./routes/health.routes.js";
 import accountRoutes from "./routes/account.routes.js";
+import errorMiddleware from "./middleware/error.middleware.js";
 
 const app = express();
 
@@ -23,5 +24,7 @@ app.use((req, res) => {
     },
   });
 });
+
+app.use(errorMiddleware);
 
 export default app;
