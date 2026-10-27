@@ -3,6 +3,7 @@ import cors from "cors";
 import helmet from "helmet";
 
 import healthRoutes from "./routes/health.routes.js";
+import accountRoutes from "./routes/account.routes.js";
 
 const app = express();
 
@@ -11,6 +12,7 @@ app.use(cors());
 app.use(express.json({ limit: "10kb" }));
 
 app.use("/api/health", healthRoutes);
+app.use("/api/accounts", accountRoutes);
 
 app.use((req, res) => {
   res.status(404).json({
