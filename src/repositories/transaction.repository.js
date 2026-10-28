@@ -200,10 +200,148 @@ async function getHistory(accountId, { type, limit, offset }) {
   }
 }
 
+async function transfer(data) {
+  const client = await pool.connect();
+  let transactionStarted = false;
+
+  const {
+    source_account_id,
+    destination_account_id,
+    amount,
+    description,
+    reference_id,
+  } = data;
+
+  try {
+    await client.query("BEGIN");
+    transactionStarted = true;
+
+    // Lock both accounts in a consistent order to reduce deadlocks.
+    const accountIds = [source_account_id, destination_account_id].sort();
+
+    const accountsResult = await client.query(
+      `SELECT id, balance
+       FROM accounts
+       WHERE id = ANY($1::uuid[])
+       ORDER BY id
+       FOR UPDATE`,
+      [accountIds],
+    );
+
+    if (accountsResult.rowCount !== 2) {
+      throw new LedgerError(
+        404,
+        "ACCOUNT_NOT_FOUND",
+        "Source or destination account not found.",
+      );
+    }
+
+    // Check the transfer reference against both accounts.
+    const duplicateResult = await client.query(
+      `SELECT account_id
+       FROM transactions
+       WHERE account_id = ANY($1::uuid[])
+         AND reference_id = $2`,
+      [accountIds, reference_id],
+    );
+
+    if (duplicateResult.rowCount > 0) {
+      throw new LedgerError(
+        409,
+        "DUPLICATE_REFERENCE",
+        "This reference ID has already been used for one of the accounts.",
+      );
+    }
+
+    // Debit only when the source has sufficient funds.
+    const debitResult = await client.query(
+      `UPDATE accounts
+       SET balance = balance - $1::numeric
+       WHERE id = $2
+         AND balance >= $1::numeric
+       RETURNING id, balance`,
+      [amount, source_account_id],
+    );
+
+    if (debitResult.rowCount === 0) {
+      throw new LedgerError(
+        409,
+        "INSUFFICIENT_FUNDS",
+        "The source account has insufficient funds.",
+      );
+    }
+
+    const creditResult = await client.query(
+      `UPDATE accounts
+       SET balance = balance + $1::numeric
+       WHERE id = $2
+       RETURNING id, balance`,
+      [amount, destination_account_id],
+    );
+
+    if (creditResult.rowCount === 0) {
+      throw new LedgerError(
+        404,
+        "ACCOUNT_NOT_FOUND",
+        "Destination account not found.",
+      );
+    }
+
+    const debitTransaction = await client.query(
+      `INSERT INTO transactions
+         (account_id, type, amount, description, reference_id)
+       VALUES ($1, 'debit', $2, $3, $4)
+       RETURNING id, account_id, type, amount, description,
+                 reference_id, created_at`,
+      [source_account_id, amount, description, reference_id],
+    );
+
+    const creditTransaction = await client.query(
+      `INSERT INTO transactions
+         (account_id, type, amount, description, reference_id)
+       VALUES ($1, 'credit', $2, $3, $4)
+       RETURNING id, account_id, type, amount, description,
+                 reference_id, created_at`,
+      [destination_account_id, amount, description, reference_id],
+    );
+
+    await client.query("COMMIT");
+    transactionStarted = false;
+
+    return {
+      source_balance: debitResult.rows[0].balance,
+      destination_balance: creditResult.rows[0].balance,
+      debit_transaction: debitTransaction.rows[0],
+      credit_transaction: creditTransaction.rows[0],
+    };
+  } catch (error) {
+    if (transactionStarted) {
+      try {
+        await client.query("ROLLBACK");
+      } catch (rollbackError) {
+        console.error("Transfer rollback failed:", rollbackError);
+      }
+    }
+
+    if (error.code === "23505") {
+      throw new LedgerError(
+        409,
+        "DUPLICATE_REFERENCE",
+        "This reference ID has already been used for one of the accounts.",
+      );
+    }
+
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export { LedgerError };
 
 export default {
   create,
   getBalance,
   getHistory,
+  transfer,
 };

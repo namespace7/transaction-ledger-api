@@ -1,8 +1,8 @@
 {
   "name": "transaction-ledger-api",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "REST API for an atomic transaction ledger with account management and transfers",
+  "main": "src/server.js",
   "scripts": {
     "test": "vitest run",
     "dev": "nodemon src/server.js",

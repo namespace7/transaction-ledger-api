@@ -359,6 +359,189 @@ describe("Transaction API", () => {
   });
 });
 
+describe("Transfer API", () => {
+  async function fundAccount(accountId, amount, referenceId) {
+    const response = await request(app)
+      .post(`/api/accounts/${accountId}/transactions`)
+      .send({
+        type: "credit",
+        amount,
+        description: "Transfer test funding",
+        reference_id: referenceId,
+      });
+
+    expect(response.status).toBe(201);
+    return response;
+  }
+
+  async function getBalance(accountId) {
+    const response = await request(app).get(
+      `/api/accounts/${accountId}/transactions/balance`,
+    );
+
+    expect(response.status).toBe(200);
+    return response.body.data.balance;
+  }
+
+  async function getTransactions(accountId) {
+    const response = await request(app).get(
+      `/api/accounts/${accountId}/transactions`,
+    );
+
+    expect(response.status).toBe(200);
+    return response.body.data.transactions;
+  }
+
+  it("transfers funds between accounts and creates two ledger entries", async () => {
+    const source = await createTestAccount("Transfer Source");
+    const destination = await createTestAccount("Transfer Destination");
+
+    await fundAccount(source.id, 500, `source-funding-${Date.now()}`);
+
+    const response = await request(app)
+      .post("/api/transfers")
+      .send({
+        source_account_id: source.id,
+        destination_account_id: destination.id,
+        amount: 150,
+        description: "Test transfer",
+        reference_id: `transfer-success-${Date.now()}`,
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body.success).toBe(true);
+    expect(response.body.data.source_balance).toBe("350.00");
+    expect(response.body.data.destination_balance).toBe("150.00");
+    expect(response.body.data.debit_transaction).toMatchObject({
+      account_id: source.id,
+      type: "debit",
+      amount: "150.00",
+    });
+    expect(response.body.data.credit_transaction).toMatchObject({
+      account_id: destination.id,
+      type: "credit",
+      amount: "150.00",
+    });
+
+    expect(await getBalance(source.id)).toBe("350.00");
+    expect(await getBalance(destination.id)).toBe("150.00");
+  });
+
+  it("rejects insufficient funds without changing either balance", async () => {
+    const source = await createTestAccount("Unfunded Source");
+    const destination = await createTestAccount("Unfunded Destination");
+
+    const response = await request(app)
+      .post("/api/transfers")
+      .send({
+        source_account_id: source.id,
+        destination_account_id: destination.id,
+        amount: 50,
+        description: "Insufficient funds test",
+        reference_id: `transfer-insufficient-${Date.now()}`,
+      });
+
+    expect(response.status).toBe(409);
+    expect(response.body.error.code).toBe("INSUFFICIENT_FUNDS");
+    expect(await getBalance(source.id)).toBe("0.00");
+    expect(await getBalance(destination.id)).toBe("0.00");
+    expect(await getTransactions(source.id)).toHaveLength(0);
+    expect(await getTransactions(destination.id)).toHaveLength(0);
+  });
+
+  it("rejects a transfer if either account does not exist", async () => {
+    const source = await createTestAccount("Existing Transfer Source");
+    await fundAccount(source.id, 200, `missing-dest-funding-${Date.now()}`);
+
+    const response = await request(app)
+      .post("/api/transfers")
+      .send({
+        source_account_id: source.id,
+        destination_account_id: "00000000-0000-4000-8000-000000000001",
+        amount: 50,
+        description: "Missing destination test",
+        reference_id: `transfer-missing-${Date.now()}`,
+      });
+
+    expect(response.status).toBe(404);
+    expect(response.body.error.code).toBe("ACCOUNT_NOT_FOUND");
+    expect(await getBalance(source.id)).toBe("200.00");
+  });
+
+  it("rejects a duplicate transfer reference without changing balances", async () => {
+    const source = await createTestAccount("Duplicate Reference Source");
+    const destination = await createTestAccount(
+      "Duplicate Reference Destination",
+    );
+
+    await fundAccount(source.id, 300, `duplicate-test-funding-${Date.now()}`);
+
+    const transfer = {
+      source_account_id: source.id,
+      destination_account_id: destination.id,
+      amount: 100,
+      description: "Duplicate reference test",
+      reference_id: `transfer-duplicate-${Date.now()}`,
+    };
+
+    const firstResponse = await request(app)
+      .post("/api/transfers")
+      .send(transfer);
+
+    expect(firstResponse.status).toBe(201);
+
+    const sourceBalanceBefore = await getBalance(source.id);
+    const destinationBalanceBefore = await getBalance(destination.id);
+
+    const secondResponse = await request(app)
+      .post("/api/transfers")
+      .send(transfer);
+
+    expect(secondResponse.status).toBe(409);
+    expect(secondResponse.body.error.code).toBe("DUPLICATE_REFERENCE");
+    expect(await getBalance(source.id)).toBe(sourceBalanceBefore);
+    expect(await getBalance(destination.id)).toBe(destinationBalanceBefore);
+  });
+
+  it("rejects transfers between the same account", async () => {
+    const account = await createTestAccount("Same Account Transfer");
+
+    const response = await request(app)
+      .post("/api/transfers")
+      .send({
+        source_account_id: account.id,
+        destination_account_id: account.id,
+        amount: 10,
+        description: "Same account test",
+        reference_id: `transfer-same-${Date.now()}`,
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe("VALIDATION_ERROR");
+    expect(await getBalance(account.id)).toBe("0.00");
+  });
+
+  it("rejects invalid transfer amounts", async () => {
+    const source = await createTestAccount("Invalid Amount Source");
+    const destination = await createTestAccount("Invalid Amount Destination");
+
+    const response = await request(app)
+      .post("/api/transfers")
+      .send({
+        source_account_id: source.id,
+        destination_account_id: destination.id,
+        amount: -10,
+        description: "Invalid amount test",
+        reference_id: `transfer-invalid-${Date.now()}`,
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe("VALIDATION_ERROR");
+    expect(await getBalance(source.id)).toBe("0.00");
+    expect(await getBalance(destination.id)).toBe("0.00");
+  });
+});
+
 afterAll(async () => {
   try {
     if (createdAccountIds.length > 0) {

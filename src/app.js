@@ -5,6 +5,7 @@ import helmet from "helmet";
 import healthRoutes from "./routes/health.routes.js";
 import accountRoutes from "./routes/account.routes.js";
 import errorMiddleware from "./middleware/error.middleware.js";
+import transferController from "./controllers/transfer.controller.js";
 
 const app = express();
 
@@ -14,6 +15,7 @@ app.use(express.json({ limit: "10kb" }));
 
 app.use("/api/health", healthRoutes);
 app.use("/api/accounts", accountRoutes);
+app.post("/api/transfers", transferController.create);
 
 app.use((req, res) => {
   res.status(404).json({

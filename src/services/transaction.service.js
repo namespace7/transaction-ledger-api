@@ -26,8 +26,13 @@ async function getHistory(accountId, { type, page, limit }) {
   };
 }
 
+async function transfer(data) {
+  return transactionRepository.transfer(data);
+}
+
 export default {
   createTransaction,
   getBalance,
   getHistory,
+  transfer,
 };
